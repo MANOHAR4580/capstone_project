@@ -6,23 +6,34 @@ from langchain.vectorstores import FAISS
 from langchain.chains import RetrievalQA
 from langchain.prompts import PromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain.document_loaders import PyPDFLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+import tempfile
 
 # -----------------Load environment variables-----------------#
 load_dotenv()
-GOOGLE_API_KEY = os.getenv("AIzaSyAAhSrn9L4NQDo38u_zwO8z_L6qcvwZiXM")
+GOOGLE_API_KEY = os.getenv("GOOGLE_AAIzaSyAAhSrn9L4NQDo38u_zwO8z_L6qcvwZiXMPI_KEY")
 
 # --------------------Streamlit setup----------------------#
 st.set_page_config(page_title="Supply Chain RAG Agents", layout="wide")
 st.title("Automated Supply Chain Optimization using GenAI")
 
-# ----------------Load FAISS Vector Store----------------- #
-@st.cache_resource
-def load_vector_db():
-    embeddings = HuggingFaceEmbeddings()
-    db = FAISS.load_local("supplychain_faiss_index", embeddings, allow_dangerous_deserialization=True)
-    return db.as_retriever(search_kwargs={"k": 4})
+# ----------------------- Upload and Process PDF ------------------------ #
+uploaded_file = st.file_uploader("Upload a Supply Chain PDF document", type="pdf")
 
-retriever = load_vector_db() if os.path.exists("supplychain_faiss_index") else None
+@st.cache_resource
+def process_pdf(file):
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+        tmp_file.write(file.read())
+        loader = PyPDFLoader(tmp_file.name)
+        documents = loader.load()
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+    docs = text_splitter.split_documents(documents)
+    embeddings = HuggingFaceEmbeddings()
+    vectorstore = FAISS.from_documents(docs, embeddings)
+    return vectorstore.as_retriever(search_kwargs={"k": 4})
+
+retriever = process_pdf(uploaded_file) if uploaded_file else None
 
 # -----------------------Initialize Google Gemini LLM-----------------------#
 llm = ChatGoogleGenerativeAI(
@@ -32,7 +43,6 @@ llm = ChatGoogleGenerativeAI(
 )
 
 # --------------------Core RAG logic --------------------- #
-
 def run_rag_agent(query, agent_prompt):
     template = PromptTemplate(
         input_variables=["context", "question"],
@@ -43,8 +53,7 @@ def run_rag_agent(query, agent_prompt):
 Use the following context to assist your answer:
 {{context}}
 
-Question: {{question}}
-"""
+Question: {{question}}"""
     )
 
     chain = RetrievalQA.from_chain_type(
@@ -72,21 +81,20 @@ def multi_agent_coordinator(query, agent_name):
     return run_rag_agent(query, agent_prompt)
 
 # -----------------UI: Select agent and input query---------------------#
-agent_choice = st.selectbox("Select Agent", ["Forecasting", "Data Collection", "Optimization", "Alert"])
-query = st.text_input("Ask your supply chain question")
+if uploaded_file:
+    agent_choice = st.selectbox("Select Agent", ["Forecasting", "Data Collection", "Optimization", "Alert"])
+    query = st.text_input("Ask your supply chain question")
 
-# -----------------------Run selected agent----------------------#
-if query and retriever:
-    with st.spinner(f"Running {agent_choice} Agent with RAG..."):
-        result = multi_agent_coordinator(query, agent_choice)
+    if query:
+        with st.spinner(f"Running {agent_choice} Agent with RAG..."):
+            result = multi_agent_coordinator(query, agent_choice)
 
-        st.subheader("Best Answer")
-        st.write(result["result"])
+            st.subheader("Best Answer")
+            st.write(result["result"])
 
-        st.subheader("Source Chunks")
-        for i, doc in enumerate(result["source_documents"]):
-            st.markdown(f"**Chunk {i + 1}**")
-            st.code(doc.page_content[:500], language="markdown")
-
-elif query:
-    st.warning("Vector DB is not available. Please ensure 'supplychain_faiss_index' exists.")
+            st.subheader("Source Chunks")
+            for i, doc in enumerate(result["source_documents"]):
+                st.markdown(f"**Chunk {i + 1}**")
+                st.code(doc.page_content[:500], language="markdown")
+else:
+    st.info("Please upload a PDF to begin.")
